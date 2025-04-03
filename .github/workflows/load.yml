@@ -1,0 +1,51 @@
+name: k6 Load Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: 'Base Url'
+        required: true
+        type: string
+      virtualuser:
+        description: 'VU'
+        type: number
+      duration:
+        description: 'Duration'
+        type: string
+
+jobs:
+  run-test:
+    runs-on: ubuntu-latest
+    if: ${{ inputs.urls }} 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup K6
+        uses: grafana/setup-k6-action@v1
+      - name: Run local k6 test
+        uses: grafana/run-k6-action@v1
+        env: 
+          HOST: ${{ inputs.urls }}
+          VU: ${{ inputs.virtualuser || 10 }}
+          DURATION: ${{ inputs.duration || '60s' }}
+          K6_WEB_DASHBOARD: true
+          K6_WEB_DASHBOARD_EXPORT: html-report.html
+        with:
+          path: test.js
+          disable-analytics: true
+          flags: --out json=summary.json
+          # debug: true
+      - name: Upload performance test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-summary-report.json
+          path: summary.json
+      - name: Upload performance test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-summary-report.html
+          path: |
+            summary.html
+            html-report.html
+        
