@@ -1,0 +1,18 @@
+[
+    {
+      "url": "/",
+      "tag": "cms"
+    },
+    {
+      "url": "/venia-tops.html",
+      "tag": "category"
+    },
+    {
+      "url": "/venia-bottoms.html",
+      "tag": "category"
+    },
+    {
+      "url": "/graphql/?query=query+storeConfig{storeConfig{store_code+store_name+default_display_currency_code+locale+website_code+website_name+__typename}availableStores{store_code+__typename}currency{available_currency_codes+__typename}}&operationName=storeConfig&variables={}",
+      "tag": "api"
+    }
+]
