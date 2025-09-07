@@ -1,0 +1,46 @@
+name: Measure URL Response Times
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: "Comma‑separated list of URLs"
+        required: true
+        default: "https://example.com,https://example.org"
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Measure response times & generate CSV
+        run: |
+          IFS=',' read -r -a urls <<< "${{ github.event.inputs.urls }}"
+          out="response-times.csv"
+          echo "url,average_time_seconds" > "$out"
+
+          for url in "${urls[@]}"; do
+            echo "::group::Measuring $url"
+            sum=0
+            count=5
+            for i in $(seq 1 $count); do
+              t=$(curl -s -w "%{time_total}" -o /dev/null "$url")
+              echo "  Try #$i: $t sec"
+              sum=$(echo "$sum + $t" | bc -l)
+            done
+            avg=$(echo "scale=6; $sum / $count" | bc -l)
+            echo "$url,$avg" >> "$out"
+            echo "Average response time for $url: $avg sec"
+            echo "::endgroup::"
+          done
+
+          echo "### Final CSV Output:"
+          cat "$out"
+
+      - name: Upload CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: response-times
+          path: response-times.csv

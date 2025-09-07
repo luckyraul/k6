@@ -1,0 +1,95 @@
+name: Lighthouse
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: 'Url List (comma separated)'
+        required: true
+        type: string
+
+jobs:
+  run-test:
+    runs-on: ubuntu-latest
+    if: ${{ inputs.urls }}
+    steps:
+      - name: Convert comma-separated URLs to newline-separated
+        id: convert
+        run: |
+          echo "urls<<EOF" >> $GITHUB_OUTPUT
+          echo "${{ github.event.inputs.urls }}" | tr ',' '\n' >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo $GITHUB_OUTPUT
+      - name: Lighthouse CI Action
+        uses: treosh/lighthouse-ci-action@12.6.1
+        with:
+          urls: ${{ steps.convert.outputs.urls }}
+          # budgetPath: ./budget.json # test performance budgets
+          uploadArtifacts: true
+          runs: 3
+      - name: Convert Lighthouse JSON to CSV with Averages
+        run: |
+          # Set current date
+          current_date=$(date -u +%F)
+
+          # Output CSV header
+          echo "date,url,performance,accessibility,best_practices,seo,pwa,fcp,lcp,tti,tbt,cls,speed_index,runs" > lh-report.csv
+
+          # Combine all reports into a single JSON array
+          jq -s 'map({
+            url: .finalUrl,
+            performance: .categories.performance.score,
+            accessibility: .categories.accessibility.score,
+            best_practices: .categories["best-practices"].score,
+            seo: .categories.seo.score,
+            pwa: .categories.pwa.score,
+            fcp: .audits["first-contentful-paint"].numericValue,
+            lcp: .audits["largest-contentful-paint"].numericValue,
+            tti: .audits.interactive.numericValue,
+            tbt: .audits["total-blocking-time"].numericValue,
+            cls: .audits["cumulative-layout-shift"].numericValue,
+            speed_index: .audits["speed-index"].numericValue
+          })' .lighthouseci/*.report.json > all_reports.json
+
+          # Process JSON: group by URL, average, and write CSV rows
+          jq -r --arg date "$current_date" '
+            group_by(.url)[] |
+            {
+              url: .[0].url,
+              runs: length,
+              performance: (map(.performance) | map(select(. != null)) | add / length),
+              accessibility: (map(.accessibility) | map(select(. != null)) | add / length),
+              best_practices: (map(.best_practices) | map(select(. != null)) | add / length),
+              seo: (map(.seo) | map(select(. != null)) | add / length),
+              pwa: (map(.pwa) | map(select(. != null)) | if length > 0 then add / length else null end),
+              fcp: (map(.fcp) | map(select(. != null)) | add / length),
+              lcp: (map(.lcp) | map(select(. != null)) | add / length),
+              tti: (map(.tti) | map(select(. != null)) | add / length),
+              tbt: (map(.tbt) | map(select(. != null)) | add / length),
+              cls: (map(.cls) | map(select(. != null)) | add / length),
+              speed_index: (map(.speed_index) | map(select(. != null)) | add / length)
+            } |
+            [
+              $date,
+              .url,
+              (.performance | tostring),
+              (.accessibility | tostring),
+              (.best_practices | tostring),
+              (.seo | tostring),
+              (.pwa | tostring),
+              (.fcp | tostring),
+              (.lcp | tostring),
+              (.tti | tostring),
+              (.tbt | tostring),
+              (.cls | tostring),
+              (.speed_index | tostring),
+              (.runs | tostring)
+            ] | @csv
+          ' all_reports.json >> lh-report.csv
+          cat lh-report.csv
+
+      - name: Upload CSV Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-csv-report
+          path: lh-report.csv
