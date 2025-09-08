@@ -29,67 +29,75 @@ jobs:
           runs: 3
       - name: Convert Lighthouse JSON to CSV with Averages
         run: |
-          # Set current date
-          current_date=$(date -u +%F)
+          mkdir -p output
+          echo "date,url,metric,value" > output/lighthouse_report.csv
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-          # Output CSV header
-          echo "date,url,performance,accessibility,best_practices,seo,pwa,fcp,lcp,tti,tbt,cls,speed_index,runs" > lh-report.csv
+          jq -n --arg date "$DATE" '
+            def shortname(m):
+              {
+                "first-contentful-paint": "FCP",
+                "speed-index": "SI",
+                "largest-contentful-paint": "LCP",
+                "total-blocking-time": "TBT",
+                "cumulative-layout-shift": "CLS"
+              }[m];
 
-          # Combine all reports into a single JSON array
-          jq -s 'map({
-            url: .finalUrl,
-            performance: .categories.performance.score,
-            accessibility: .categories.accessibility.score,
-            best_practices: .categories["best-practices"].score,
-            seo: .categories.seo.score,
-            pwa: .categories.pwa.score,
-            fcp: .audits["first-contentful-paint"].numericValue,
-            lcp: .audits["largest-contentful-paint"].numericValue,
-            tti: .audits.interactive.numericValue,
-            tbt: .audits["total-blocking-time"].numericValue,
-            cls: .audits["cumulative-layout-shift"].numericValue,
-            speed_index: .audits["speed-index"].numericValue
-          })' .lighthouseci/*.report.json > all_reports.json
+            def convert_value(metric; value):
+              if metric == "cumulative-layout-shift" then value      # CLS is unitless
+              else (value / 1000)                                    # Convert ms to s
+              end;
 
-          # Process JSON: group by URL, average, and write CSV rows
-          jq -r --arg date "$current_date" '
-            group_by(.url)[] |
-            {
-              url: .[0].url,
-              runs: length,
-              performance: (map(.performance) | map(select(. != null)) | add / length),
-              accessibility: (map(.accessibility) | map(select(. != null)) | add / length),
-              best_practices: (map(.best_practices) | map(select(. != null)) | add / length),
-              seo: (map(.seo) | map(select(. != null)) | add / length),
-              pwa: (map(.pwa) | map(select(. != null)) | if length > 0 then add / length else null end),
-              fcp: (map(.fcp) | map(select(. != null)) | add / length),
-              lcp: (map(.lcp) | map(select(. != null)) | add / length),
-              tti: (map(.tti) | map(select(. != null)) | add / length),
-              tbt: (map(.tbt) | map(select(. != null)) | add / length),
-              cls: (map(.cls) | map(select(. != null)) | add / length),
-              speed_index: (map(.speed_index) | map(select(. != null)) | add / length)
-            } |
-            [
-              $date,
-              .url,
-              (.performance | tostring),
-              (.accessibility | tostring),
-              (.best_practices | tostring),
-              (.seo | tostring),
-              (.pwa | tostring),
-              (.fcp | tostring),
-              (.lcp | tostring),
-              (.tti | tostring),
-              (.tbt | tostring),
-              (.cls | tostring),
-              (.speed_index | tostring),
-              (.runs | tostring)
-            ] | @csv
-          ' all_reports.json >> lh-report.csv
-          cat lh-report.csv
-
+            reduce inputs as $report (
+              {};
+              . + (
+                $report as $r
+                | $r.finalUrl as $url
+                | {
+                    "first-contentful-paint": $r.audits["first-contentful-paint"].numericValue,
+                    "speed-index": $r.audits["speed-index"].numericValue,
+                    "largest-contentful-paint": $r.audits["largest-contentful-paint"].numericValue,
+                    "total-blocking-time": $r.audits["total-blocking-time"].numericValue,
+                    "cumulative-layout-shift": $r.audits["cumulative-layout-shift"].numericValue
+                  }
+                | to_entries
+                | map(select(.value != null))
+                | map({
+                    raw_metric: .key,
+                    short_metric: shortname(.key),
+                    converted_value: convert_value(.key; .value)
+                  })
+                | map({
+                    key: ($url + "|" + .short_metric),
+                    value: {sum: .converted_value, count: 1}
+                  })
+                | from_entries
+              ) as $current
+              | reduce ($current | keys_unsorted[]) as $k (
+                  .;
+                  .[$k] = if has($k)
+                    then {
+                      sum: (.[$k].sum + $current[$k].sum),
+                      count: (.[$k].count + $current[$k].count)
+                    }
+                    else $current[$k]
+                  end
+                )
+            )
+            | to_entries
+            | map({
+                url: (.key | split("|")[0]),
+                metric: (.key | split("|")[1]),
+                avg: (.value.sum / .value.count)
+              })
+            | sort_by(.url, .metric)
+            | .[]
+            | [$date, .url, .metric, (.avg | tostring)]
+            | @csv
+          ' .lighthouseci/*.report.json >> output/lighthouse_report.csv
+          cat output/lighthouse_report.csv
       - name: Upload CSV Report
         uses: actions/upload-artifact@v4
         with:
           name: lighthouse-csv-report
-          path: lh-report.csv
+          path: output/lighthouse_report.csv
